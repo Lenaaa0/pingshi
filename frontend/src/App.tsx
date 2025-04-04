@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { Layout, Typography, Card, Row, Col, Button, Menu, Input, Table, Tag, message, Radio } from 'antd';
+import { Layout, Typography, Card, Row, Col, Button, Menu, Input, Table, Tag, message, Radio, Empty } from 'antd';
 import axios from 'axios';
 
 const { Header, Content, Sider } = Layout;
 const { Title, Paragraph } = Typography;
+const { Column } = Table;
 
 // 定义扫描结果类型
 interface ScanResult {
@@ -77,8 +78,10 @@ const SecurityPage = () => {
   const [target, setTarget] = useState('');
   const [scanType, setScanType] = useState('port');
   const [scanning, setScanning] = useState(false);
-  const [scanResults, setScanResults] = useState<ScanResult[]>([]);
+  const [scanResults, setScanResults] = useState<any[]>([]);
+  const [scanHistory, setScanHistory] = useState<ScanResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const [selectedScan, setSelectedScan] = useState<ScanResult | null>(null);
   
   // 获取扫描历史
   const fetchScanHistory = async () => {
@@ -87,13 +90,14 @@ const SecurityPage = () => {
       
       try {
         const response = await axios.get('/api/security/results');
-        setScanResults(response.data || []);
+        console.log('获取到的扫描历史:', response.data);
+        setScanHistory(response.data || []);
       } catch (error) {
         console.error('获取扫描历史失败:', error);
-        setScanResults([]);
+        setScanHistory([]);
         
         if (process.env.NODE_ENV === 'development') {
-          message.error('获取扫描历史失败');
+          console.error('获取扫描历史失败:', error);
         }
       }
     } finally {
@@ -124,97 +128,104 @@ const SecurityPage = () => {
       
       console.log('扫描响应:', response.data);
       
-      // 确保我们从响应中获取scan_id
+      // 获取扫描ID
       const scanId = response.data.scan_id;
       
-      if (!scanId) {
-        throw new Error('未获取到扫描ID');
+      if (scanId) {
+        // 等待扫描完成并获取结果
+        await waitForScanCompletion(scanId);
+      } else {
+        message.error('扫描启动失败，未返回扫描ID');
+        setScanning(false);
       }
-      
-      // 等待扫描完成并获取结果
-      await waitForScanCompletion(scanId);
     } catch (error) {
-      console.error('扫描失败:', error);
-      message.error('扫描失败');
-    } finally {
+      console.error('扫描错误:', error);
+      message.error('扫描请求失败');
       setScanning(false);
     }
   };
   
-  // 等待扫描完成
+  // 等待扫描完成并获取结果
   const waitForScanCompletion = async (scanId: string) => {
     console.log('开始等待扫描完成，ID:', scanId);
     
+    const maxRetries = 30;
+    const retryInterval = 2000; // 2秒
     let retries = 0;
-    const maxRetries = 30; // 最多尝试30次
-    const retryInterval = 2000; // 每2秒尝试一次
     
     while (retries < maxRetries) {
       try {
         // 尝试获取扫描结果
-        const resultResponse = await axios.get(`/api/security/scan/${scanId}/results`);
+        const resultResponse = await axios.get(`/api/security/results/${scanId}`);
         
-        if (resultResponse.data && resultResponse.data.status === 'completed') {
-          // 扫描完成，获取结果
-          setScanResults(resultResponse.data.results || []);
-          message.success('扫描完成');
-          return;
-        } else if (resultResponse.data && resultResponse.data.status === 'failed') {
-          throw new Error('扫描失败');
+        if (resultResponse.status === 200 && resultResponse.data) {
+          // 扫描完成，处理结果
+          const scanResult = resultResponse.data;
+          
+          if (scanResult.status === 'completed' || scanResult.status === 'failed') {
+            console.log('扫描完成:', scanResult);
+            
+            // 处理扫描结果
+            if (scanResult.results) {
+              setScanResults(scanResult.results);
+            }
+            
+            // 刷新扫描历史
+            fetchScanHistory();
+            
+            setScanning(false);
+            return;
+          }
         }
-        
-        // 如果扫描仍在进行中，等待后再次尝试
-        await new Promise(resolve => setTimeout(resolve, retryInterval));
-        retries++;
       } catch (error) {
         console.error('检查扫描状态失败:', error);
         
-        // 尝试备用路径
-        try {
-          const statusResponse = await axios.get(`/api/security/scan/${scanId}`);
-          
-          if (statusResponse.data && statusResponse.data.status === 'completed') {
-            // 扫描完成，获取结果
-            setScanResults(statusResponse.data.results || []);
-            message.success('扫描完成');
-            return;
-          } else if (statusResponse.data && statusResponse.data.status === 'failed') {
-            throw new Error('扫描失败');
-          }
-        } catch (statusError) {
-          console.error('备用路径也失败:', statusError);
-        }
-        
-        // 等待后再次尝试
-        await new Promise(resolve => setTimeout(resolve, retryInterval));
-        retries++;
-      }
-    }
-    
-    message.error('扫描超时，请稍后查看结果');
-  };
-  
-  // 查看扫描结果
-  const viewScanResult = async (id: string) => {
-    try {
-      // 尝试不同的API路径
-      let response;
-      try {
-        response = await axios.get(`/api/security/results/${id}`);
-      } catch (error) {
-        if (axios.isAxiosError(error) && error.response?.status === 404) {
-          // 如果第一个路径返回404，尝试第二个路径
-          response = await axios.get(`/api/security/scan/${id}`);
-        } else {
-          throw error;
+        // 如果是404错误，可能扫描还未完成，继续等待
+        if (axios.isAxiosError(error) && error.response?.status !== 404) {
+          console.error('获取扫描结果失败:', error);
+          setScanning(false);
+          return;
         }
       }
       
+      // 等待后再次尝试
+      await new Promise(resolve => setTimeout(resolve, retryInterval));
+      retries++;
+    }
+    
+    message.error('扫描超时，请稍后查看结果');
+    setScanning(false);
+  };
+  
+  // 查看扫描结果
+  const viewScanResult = async (record: ScanResult) => {
+    try {
+      const response = await axios.get(`/api/security/results/${record.scan_id}`);
       console.log('扫描结果:', response.data);
-      message.info('请在控制台查看扫描结果');
+      
+      // 设置选中的扫描结果，用于显示详情
+      setSelectedScan(response.data);
+      
+      // 如果有结果，显示结果
+      if (response.data.results) {
+        setScanResults(response.data.results);
+        setScanType(response.data.scan_type); // 设置扫描类型，以便正确显示结果
+      }
     } catch (error) {
       console.error('获取扫描结果失败:', error);
       message.error('获取扫描结果失败');
+    }
+  };
+  
+  // 格式化日期时间
+  const formatDateTime = (dateTimeStr: string | null) => {
+    if (!dateTimeStr) return '未知';
+    try {
+      const date = new Date(dateTimeStr);
+      if (isNaN(date.getTime())) return '无效日期';
+      return date.toLocaleString('zh-CN');
+    } catch (error) {
+      return '无效日期';
     }
   };
   
@@ -261,7 +272,7 @@ const SecurityPage = () => {
       title: '开始时间',
       dataIndex: 'start_time',
       key: 'start_time',
-      render: (text: string) => new Date(text).toLocaleString(),
+      render: (text: string) => formatDateTime(text),
     },
     {
       title: '操作',
@@ -270,7 +281,7 @@ const SecurityPage = () => {
         <Button 
           type="primary" 
           size="small" 
-          onClick={() => viewScanResult(record.id)}
+          onClick={() => viewScanResult(record)}
           disabled={record.status !== 'completed'}
         >
           查看
@@ -278,6 +289,44 @@ const SecurityPage = () => {
       ),
     },
   ];
+  
+  // 渲染扫描结果
+  const renderScanResults = () => {
+    if (!scanResults || scanResults.length === 0) {
+      return <Empty description="暂无扫描结果" />;
+    }
+
+    if (scanType === 'port') {
+      const portColumns = [
+        { title: "端口", dataIndex: "port", key: "port" },
+        { title: "状态", dataIndex: "status", key: "status" },
+        { title: "服务", dataIndex: "service", key: "service" }
+      ];
+      
+      return (
+        <Table 
+          dataSource={scanResults} 
+          columns={portColumns}
+          rowKey={(record, index = 0) => index.toString()} 
+        />
+      );
+    } else {
+      const vulnColumns = [
+        { title: "漏洞名称", dataIndex: "name", key: "name" },
+        { title: "严重程度", dataIndex: "severity", key: "severity" },
+        { title: "描述", dataIndex: "description", key: "description" },
+        { title: "修复建议", dataIndex: "recommendation", key: "recommendation" }
+      ];
+      
+      return (
+        <Table 
+          dataSource={scanResults} 
+          columns={vulnColumns}
+          rowKey={(record, index = 0) => index.toString()} 
+        />
+      );
+    }
+  };
   
   return (
     <div style={{ padding: 24 }}>
@@ -312,11 +361,29 @@ const SecurityPage = () => {
         </div>
       </Card>
       
+      {/* 显示选中的扫描结果 */}
+      {selectedScan && (
+        <Card 
+          title={`扫描结果: ${selectedScan.target} (${selectedScan.scan_type === 'port' ? '端口扫描' : '漏洞扫描'})`}
+          style={{ marginBottom: 24 }}
+          extra={<Button size="small" onClick={() => setSelectedScan(null)}>关闭</Button>}
+        >
+          <div style={{ marginBottom: 16 }}>
+            <p><strong>扫描ID:</strong> {selectedScan.scan_id}</p>
+            <p><strong>开始时间:</strong> {formatDateTime(selectedScan.start_time)}</p>
+            <p><strong>结束时间:</strong> {formatDateTime(selectedScan.end_time)}</p>
+            <p><strong>状态:</strong> {selectedScan.status === 'completed' ? '已完成' : selectedScan.status === 'failed' ? '失败' : '进行中'}</p>
+          </div>
+          
+          {renderScanResults()}
+        </Card>
+      )}
+      
       <Card title="扫描历史">
         <Table 
           columns={columns} 
-          dataSource={scanResults || []}
-          rowKey="id"
+          dataSource={scanHistory} 
+          rowKey="scan_id"
           loading={loading}
         />
       </Card>

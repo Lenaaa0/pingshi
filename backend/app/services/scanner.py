@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime
 import uuid
 import threading
@@ -9,6 +9,7 @@ import http.client
 from app.models.security_log import SecurityLog
 from app.models.scan_result import ScanResult, VulnerabilityDetail, PortDetail
 import traceback
+import asyncio
 
 class SecurityScanner:
     def __init__(self):
@@ -706,4 +707,136 @@ class SecurityScanner:
         )
         result = sorted_results[0] if sorted_results else None
         print(f"最新结果: {result.id if result else 'None'}")
-        return result 
+        return result
+
+    async def run_scan(self, target: str, scan_type: str, scan_id: str, scan_results: dict):
+        """运行扫描并更新结果"""
+        try:
+            print(f"开始扫描: 目标={target}, 类型={scan_type}")
+            
+            # 更新开始时间
+            scan_results[scan_id]["start_time"] = datetime.now().isoformat()
+            scan_results[scan_id]["status"] = "running"
+            
+            # 执行扫描
+            if scan_type == "port":
+                results = await self.scan_ports(target)
+            elif scan_type == "vulnerability":
+                results = await self.scan_vulnerabilities(target)
+            else:
+                results = {"error": f"不支持的扫描类型: {scan_type}"}
+                scan_results[scan_id]["status"] = "failed"
+            
+            # 更新扫描结果
+            scan_results[scan_id]["results"] = results
+            scan_results[scan_id]["end_time"] = datetime.now().isoformat()
+            scan_results[scan_id]["status"] = "completed"
+            
+            print(f"扫描结果: {results}")
+            
+        except Exception as e:
+            print(f"扫描执行错误: {str(e)}")
+            scan_results[scan_id]["status"] = "failed"
+            scan_results[scan_id]["results"] = {"error": str(e)}
+            scan_results[scan_id]["end_time"] = datetime.now().isoformat()
+
+    async def scan_ports(self, target: str) -> List[Dict[str, Any]]:
+        """扫描目标的开放端口"""
+        print(f"开始端口扫描: {target}")
+        
+        # 解析目标IP
+        try:
+            ip = socket.gethostbyname(target)
+            print(f"目标IP: {ip}")
+        except socket.gaierror:
+            return [{"error": f"无法解析主机名: {target}"}]
+        
+        # 常用端口列表
+        common_ports = [21, 22, 23, 25, 53, 80, 110, 115, 135, 139, 143, 443, 445, 993, 995, 1023, 1025, 1049, 1433, 1723, 3306, 3389, 5900, 8080, 8443]
+        
+        open_ports = []
+        
+        # 扫描端口
+        for port in common_ports:
+            print(f"扫描端口: {port}")
+            try:
+                # 创建socket
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1)  # 设置超时时间
+                
+                # 尝试连接
+                result = sock.connect_ex((ip, port))
+                
+                # 如果连接成功，端口开放
+                if result == 0:
+                    print(f"端口 {port} 开放")
+                    open_ports.append({
+                        "port": port,
+                        "status": "open",
+                        "service": self._get_default_service_name(port)
+                    })
+                
+                # 关闭socket
+                sock.close()
+                
+                # 短暂暂停，避免触发目标的防火墙
+                await asyncio.sleep(0.1)
+                
+            except Exception as e:
+                print(f"扫描端口 {port} 时出错: {str(e)}")
+        
+        print(f"扫描结果: 扫描完成。在 {target} 上发现 {len(open_ports)} 个开放端口。")
+        
+        return open_ports
+    
+    async def scan_vulnerabilities(self, target: str) -> List[Dict[str, Any]]:
+        """扫描目标的漏洞"""
+        print(f"开始漏洞扫描: {target}")
+        
+        # 模拟漏洞扫描结果
+        # 实际应用中，这里应该调用真实的漏洞扫描工具
+        await asyncio.sleep(2)  # 模拟扫描耗时
+        
+        return [
+            {
+                "name": "示例漏洞 1",
+                "severity": "高",
+                "description": "这是一个示例漏洞描述",
+                "recommendation": "这是修复建议"
+            },
+            {
+                "name": "示例漏洞 2",
+                "severity": "中",
+                "description": "另一个示例漏洞描述",
+                "recommendation": "另一个修复建议"
+            }
+        ]
+
+    def get_service_name(self, port: int) -> str:
+        """根据端口号获取服务名称"""
+        services = {
+            21: "FTP",
+            22: "SSH",
+            23: "Telnet",
+            25: "SMTP",
+            53: "DNS",
+            80: "HTTP",
+            110: "POP3",
+            115: "SFTP",
+            135: "RPC",
+            139: "NetBIOS",
+            143: "IMAP",
+            443: "HTTPS",
+            445: "SMB",
+            993: "IMAPS",
+            995: "POP3S",
+            1433: "MSSQL",
+            1723: "PPTP",
+            3306: "MySQL",
+            3389: "RDP",
+            5900: "VNC",
+            8080: "HTTP-Proxy",
+            8443: "HTTPS-Alt"
+        }
+        
+        return services.get(port, "未知") 
