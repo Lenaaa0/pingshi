@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Card, Input, Button, Typography, Alert } from 'antd';
-import { ScanOutlined } from '@ant-design/icons';
+import { Card, Input, Button, Typography, Alert, Form, Select, Switch, Space, Divider } from 'antd';
+import { ScanOutlined, SettingOutlined, LockOutlined } from '@ant-design/icons';
 
-const { Title, Paragraph } = Typography;
+const { Title, Paragraph, Text } = Typography;
+const { Option } = Select;
 
 interface PortScanFormProps {
   onScan: (target: string) => void;
@@ -11,13 +12,26 @@ interface PortScanFormProps {
 
 const PortScanForm: React.FC<PortScanFormProps> = ({ onScan, scanning }) => {
   const [target, setTarget] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [form] = Form.useForm();
+  
+  const handleScan = () => {
+    if (!target.trim()) {
+      return;
+    }
+    onScan(target);
+  };
   
   return (
     <div>
       <Card style={{ marginBottom: 24 }}>
-        <Title level={4}>端口扫描</Title>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
+          <LockOutlined style={{ fontSize: 24, marginRight: 12, color: '#1890ff' }} />
+          <Title level={4} style={{ margin: 0 }}>端口扫描</Title>
+        </div>
+        
         <Paragraph>
-          端口扫描可以检测目标系统开放的网络端口，识别运行的服务和版本信息。
+          端口扫描可以检测目标系统开放的网络端口，识别运行的服务和版本信息。通过端口扫描，您可以了解系统的网络暴露面，发现潜在的安全漏洞和未授权的服务。
         </Paragraph>
         
         <Alert
@@ -40,7 +54,7 @@ const PortScanForm: React.FC<PortScanFormProps> = ({ onScan, scanning }) => {
             type="primary"
             icon={<ScanOutlined />}
             loading={scanning}
-            onClick={() => onScan(target)}
+            onClick={handleScan}
             size="large"
           >
             开始扫描

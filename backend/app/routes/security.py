@@ -98,4 +98,57 @@ async def get_scan_result(result_id: str):
     if result_id not in scan_results:
         raise HTTPException(status_code=404, detail=f"未找到ID为{result_id}的扫描结果")
     
-    return scan_results[result_id] 
+    return scan_results[result_id]
+
+@router.post("/scan/schedule")
+async def schedule_scan(
+    target: str = Form(...),
+    scan_type: str = Form(...),
+    schedule_type: str = Form(...),
+    schedule_time: str = Form(...),
+    schedule_day: Optional[int] = Form(None),
+    schedule_weekday: Optional[int] = Form(None)
+):
+    """排程扫描"""
+    try:
+        schedule = {
+            "type": schedule_type,
+            "time": schedule_time
+        }
+        
+        if schedule_type == "weekly" and schedule_weekday is not None:
+            schedule["weekday"] = schedule_weekday
+        elif schedule_type == "monthly" and schedule_day is not None:
+            schedule["day"] = schedule_day
+            
+        scan_id = await scanner.schedule_scan(target, scan_type, schedule)
+        return {"scan_id": scan_id, "status": "scheduled"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"排程扫描失败: {str(e)}")
+
+@router.get("/schedules")
+async def get_scan_schedules():
+    """获取所有排程扫描"""
+    return scanner.scheduled_scans
+
+@router.delete("/schedule/{schedule_id}")
+async def delete_scan_schedule(schedule_id: str):
+    """删除排程扫描"""
+    if schedule_id in scanner.scheduled_scans:
+        del scanner.scheduled_scans[schedule_id]
+        return {"status": "deleted"}
+    raise HTTPException(status_code=404, detail=f"未找到ID为{schedule_id}的排程")
+
+@router.get("/vulnerabilities/search")
+async def search_vulnerabilities(keyword: str):
+    """搜索漏洞数据库"""
+    results = scanner.vuln_db.search_vulnerability(keyword)
+    return results
+
+@router.post("/vulnerabilities/update")
+async def update_vulnerability_database():
+    """更新漏洞数据库"""
+    success, message = await scanner.vuln_db.update_database()
+    if success:
+        return {"status": "success", "message": message}
+    raise HTTPException(status_code=400, detail=message) 

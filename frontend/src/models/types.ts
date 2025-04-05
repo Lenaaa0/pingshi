@@ -1,6 +1,6 @@
 export interface VulnerabilityDetail {
   name: string;
-  severity: 'high' | 'medium' | 'low';
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
   description: string;
   recommendation: string;
 }
