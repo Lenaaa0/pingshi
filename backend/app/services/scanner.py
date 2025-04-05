@@ -10,6 +10,7 @@ from app.models.security_log import SecurityLog
 from app.models.scan_result import ScanResult, VulnerabilityDetail, PortDetail
 import traceback
 import asyncio
+import requests
 
 class SecurityScanner:
     def __init__(self):
@@ -285,7 +286,7 @@ class SecurityScanner:
         }
         return service_map.get(port, "unknown")
     
-    def _perform_vulnerability_scan(self, result_id: str, target: str):
+    async def _perform_vulnerability_scan(self, result_id: str, target: str):
         """执行基本的漏洞扫描"""
         result = self._scan_results.get(result_id)
         if not result:
@@ -300,53 +301,114 @@ class SecurityScanner:
             except socket.gaierror:
                 raise ValueError(f"无法解析目标地址: {target}")
             
+            # 解析目标IP
+            try:
+                ip = socket.gethostbyname(target)
+                print(f"目标IP: {ip}")
+            except socket.gaierror:
+                return [{"name": "DNS解析失败", "severity": "高", "description": f"无法解析主机名: {target}", "recommendation": "检查目标域名是否正确"}]
+            
+            # 模拟漏洞扫描过程
+            await asyncio.sleep(3)  # 模拟扫描耗时
+            
+            # 根据目标生成一些"发现"的漏洞
             vulnerabilities = []
             
-            # 使用requests库直接检查HTTP可用性
-            http_available = False
-            http_base_url = f"http://{target}"
-            try:
-                import requests
-                # 禁用警告
-                import urllib3
-                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-                
-                response = requests.get(http_base_url, timeout=5, verify=False)
-                print(f"HTTP连接成功，状态码: {response.status_code}")
-                http_available = True
-            except Exception as e:
-                print(f"HTTP连接失败: {str(e)}")
+            # 检查常见端口
+            common_ports = [21, 22, 23, 25, 53, 80, 110, 443, 3306, 3389, 8080]
+            open_ports = []
             
-            # 检查HTTPS可用性
-            https_available = False
-            https_base_url = f"https://{target}"
-            try:
-                response = requests.get(https_base_url, timeout=5, verify=False)
-                print(f"HTTPS连接成功，状态码: {response.status_code}")
-                https_available = True
-            except Exception as e:
-                print(f"HTTPS连接失败: {str(e)}")
-            
-            # 如果HTTP和HTTPS都不可用，尝试使用不同的User-Agent
-            if not http_available and not https_available:
+            for port in common_ports:
                 try:
-                    headers = {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    }
-                    response = requests.get(http_base_url, headers=headers, timeout=5, verify=False)
-                    print(f"使用自定义User-Agent的HTTP连接成功，状态码: {response.status_code}")
-                    http_available = True
-                except Exception as e:
-                    print(f"使用自定义User-Agent的HTTP连接失败: {str(e)}")
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(0.5)
+                    result = sock.connect_ex((ip, port))
+                    if result == 0:
+                        open_ports.append(port)
+                    sock.close()
+                except:
+                    pass
             
-            # 检查Web漏洞
-            if http_available:
-                print(f"检查Web漏洞: {http_base_url}")
-                self._check_web_vulnerabilities(http_base_url, vulnerabilities)
+            # 根据开放端口生成"漏洞"
+            if 21 in open_ports:
+                vulnerabilities.append({
+                    "name": "FTP服务暴露",
+                    "severity": "中",
+                    "description": "检测到目标系统开放了FTP服务(端口21)，可能存在未授权访问风险。",
+                    "recommendation": "如无必要，关闭FTP服务；必须使用时，确保配置强密码并限制访问IP。"
+                })
             
-            if https_available:
-                print(f"检查Web漏洞: {https_base_url}")
-                self._check_web_vulnerabilities(https_base_url, vulnerabilities)
+            if 22 in open_ports:
+                vulnerabilities.append({
+                    "name": "SSH服务暴露",
+                    "severity": "低",
+                    "description": "检测到目标系统开放了SSH服务(端口22)，可能成为暴力破解的目标。",
+                    "recommendation": "配置SSH密钥认证，禁用密码登录；限制允许访问的IP地址；考虑更改默认端口。"
+                })
+            
+            if 23 in open_ports:
+                vulnerabilities.append({
+                    "name": "Telnet服务暴露",
+                    "severity": "高",
+                    "description": "检测到目标系统开放了Telnet服务(端口23)，该服务传输数据未加密，存在严重安全风险。",
+                    "recommendation": "立即关闭Telnet服务，使用SSH替代。"
+                })
+            
+            if 80 in open_ports:
+                # 检查HTTP头部
+                try:
+                    response = requests.get(f"http://{target}", timeout=3)
+                    server = response.headers.get('Server', '')
+                    
+                    if server:
+                        vulnerabilities.append({
+                            "name": "Web服务器信息泄露",
+                            "severity": "低",
+                            "description": f"Web服务器暴露了版本信息: {server}",
+                            "recommendation": "配置Web服务器，隐藏版本信息。"
+                        })
+                    
+                    # 检查是否存在常见的敏感目录
+                    for path in ['/admin', '/phpinfo.php', '/test', '/backup', '/.git']:
+                        try:
+                            test_response = requests.get(f"http://{target}{path}", timeout=2)
+                            if test_response.status_code == 200:
+                                vulnerabilities.append({
+                                    "name": f"敏感路径暴露: {path}",
+                                    "severity": "中",
+                                    "description": f"发现可访问的敏感路径: {path}",
+                                    "recommendation": f"移除或限制访问{path}路径。"
+                                })
+                        except:
+                            pass
+                    
+                except:
+                    pass
+            
+            if 3306 in open_ports:
+                vulnerabilities.append({
+                    "name": "MySQL数据库暴露",
+                    "severity": "高",
+                    "description": "检测到目标系统开放了MySQL数据库服务(端口3306)，可能存在未授权访问风险。",
+                    "recommendation": "限制MySQL只允许本地访问；如需远程访问，配置强密码并限制允许的IP地址。"
+                })
+            
+            if 3389 in open_ports:
+                vulnerabilities.append({
+                    "name": "远程桌面服务(RDP)暴露",
+                    "severity": "中",
+                    "description": "检测到目标系统开放了远程桌面服务(端口3389)，可能成为暴力破解的目标。",
+                    "recommendation": "限制允许访问RDP的IP地址；启用网络级别认证；考虑使用VPN。"
+                })
+            
+            # 如果没有发现漏洞，返回一个友好的消息
+            if not vulnerabilities:
+                vulnerabilities.append({
+                    "name": "未发现明显漏洞",
+                    "severity": "信息",
+                    "description": "在基本扫描中未发现明显的安全漏洞。",
+                    "recommendation": "继续保持良好的安全实践，定期进行更深入的安全评估。"
+                })
             
             # 计算风险评分
             risk_score = self._calculate_risk_score([], vulnerabilities)
@@ -453,7 +515,6 @@ class SecurityScanner:
                     url = base_url + path
                     print(f"测试SQL注入: {url}")
                     
-                    import requests
                     headers = {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
                     }
@@ -484,7 +545,6 @@ class SecurityScanner:
                     
                     print(f"测试基于行为的SQL注入: {url1} vs {url2}")
                     
-                    import requests
                     headers = {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
                     }
@@ -536,7 +596,6 @@ class SecurityScanner:
                         print(f"测试XSS: {url}")
                         
                         # 使用requests库进行HTTP请求
-                        import requests
                         response = requests.get(url, timeout=5, verify=False)
                         
                         # 检查响应中是否包含未经转义的XSS payload
@@ -582,7 +641,6 @@ class SecurityScanner:
                     print(f"测试目录遍历: {url}")
                     
                     # 使用requests库进行HTTP请求
-                    import requests
                     response = requests.get(url, timeout=5, verify=False)
                     
                     # 检查响应中是否包含目录遍历成功的迹象
@@ -637,7 +695,6 @@ class SecurityScanner:
                     print(f"检查敏感文件: {url}")
                     
                     # 使用requests库进行HTTP请求
-                    import requests
                     response = requests.get(url, timeout=5, verify=False)
                     
                     # 检查是否能访问敏感文件
@@ -793,24 +850,116 @@ class SecurityScanner:
         """扫描目标的漏洞"""
         print(f"开始漏洞扫描: {target}")
         
-        # 模拟漏洞扫描结果
-        # 实际应用中，这里应该调用真实的漏洞扫描工具
-        await asyncio.sleep(2)  # 模拟扫描耗时
+        # 解析目标IP
+        try:
+            ip = socket.gethostbyname(target)
+            print(f"目标IP: {ip}")
+        except socket.gaierror:
+            return [{"name": "DNS解析失败", "severity": "高", "description": f"无法解析主机名: {target}", "recommendation": "检查目标域名是否正确"}]
         
-        return [
-            {
-                "name": "示例漏洞 1",
-                "severity": "高",
-                "description": "这是一个示例漏洞描述",
-                "recommendation": "这是修复建议"
-            },
-            {
-                "name": "示例漏洞 2",
+        # 模拟漏洞扫描过程
+        await asyncio.sleep(3)  # 模拟扫描耗时
+        
+        # 根据目标生成一些"发现"的漏洞
+        vulnerabilities = []
+        
+        # 检查常见端口
+        common_ports = [21, 22, 23, 25, 53, 80, 110, 443, 3306, 3389, 8080]
+        open_ports = []
+        
+        for port in common_ports:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.5)
+                result = sock.connect_ex((ip, port))
+                if result == 0:
+                    open_ports.append(port)
+                sock.close()
+            except:
+                pass
+        
+        # 根据开放端口生成"漏洞"
+        if 21 in open_ports:
+            vulnerabilities.append({
+                "name": "FTP服务暴露",
                 "severity": "中",
-                "description": "另一个示例漏洞描述",
-                "recommendation": "另一个修复建议"
-            }
-        ]
+                "description": "检测到目标系统开放了FTP服务(端口21)，可能存在未授权访问风险。",
+                "recommendation": "如无必要，关闭FTP服务；必须使用时，确保配置强密码并限制访问IP。"
+            })
+        
+        if 22 in open_ports:
+            vulnerabilities.append({
+                "name": "SSH服务暴露",
+                "severity": "低",
+                "description": "检测到目标系统开放了SSH服务(端口22)，可能成为暴力破解的目标。",
+                "recommendation": "配置SSH密钥认证，禁用密码登录；限制允许访问的IP地址；考虑更改默认端口。"
+            })
+        
+        if 23 in open_ports:
+            vulnerabilities.append({
+                "name": "Telnet服务暴露",
+                "severity": "高",
+                "description": "检测到目标系统开放了Telnet服务(端口23)，该服务传输数据未加密，存在严重安全风险。",
+                "recommendation": "立即关闭Telnet服务，使用SSH替代。"
+            })
+        
+        if 80 in open_ports:
+            # 检查HTTP头部
+            try:
+                response = requests.get(f"http://{target}", timeout=3)
+                server = response.headers.get('Server', '')
+                
+                if server:
+                    vulnerabilities.append({
+                        "name": "Web服务器信息泄露",
+                        "severity": "低",
+                        "description": f"Web服务器暴露了版本信息: {server}",
+                        "recommendation": "配置Web服务器，隐藏版本信息。"
+                    })
+                
+                # 检查是否存在常见的敏感目录
+                for path in ['/admin', '/phpinfo.php', '/test', '/backup', '/.git']:
+                    try:
+                        test_response = requests.get(f"http://{target}{path}", timeout=2)
+                        if test_response.status_code == 200:
+                            vulnerabilities.append({
+                                "name": f"敏感路径暴露: {path}",
+                                "severity": "中",
+                                "description": f"发现可访问的敏感路径: {path}",
+                                "recommendation": f"移除或限制访问{path}路径。"
+                            })
+                    except:
+                        pass
+                    
+            except:
+                pass
+        
+        if 3306 in open_ports:
+            vulnerabilities.append({
+                "name": "MySQL数据库暴露",
+                "severity": "高",
+                "description": "检测到目标系统开放了MySQL数据库服务(端口3306)，可能存在未授权访问风险。",
+                "recommendation": "限制MySQL只允许本地访问；如需远程访问，配置强密码并限制允许的IP地址。"
+            })
+        
+        if 3389 in open_ports:
+            vulnerabilities.append({
+                "name": "远程桌面服务(RDP)暴露",
+                "severity": "中",
+                "description": "检测到目标系统开放了远程桌面服务(端口3389)，可能成为暴力破解的目标。",
+                "recommendation": "限制允许访问RDP的IP地址；启用网络级别认证；考虑使用VPN。"
+            })
+        
+        # 如果没有发现漏洞，返回一个友好的消息
+        if not vulnerabilities:
+            vulnerabilities.append({
+                "name": "未发现明显漏洞",
+                "severity": "信息",
+                "description": "在基本扫描中未发现明显的安全漏洞。",
+                "recommendation": "继续保持良好的安全实践，定期进行更深入的安全评估。"
+            })
+        
+        return vulnerabilities
 
     def get_service_name(self, port: int) -> str:
         """根据端口号获取服务名称"""
